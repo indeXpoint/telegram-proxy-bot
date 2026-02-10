@@ -79,7 +79,7 @@ await fetch(`${API}/sendMessage`, {
 });
 
 res.send("ok");
-
+});
 
 
 // REQUIRED FOR RENDER
