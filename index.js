@@ -17,6 +17,7 @@ We’ll reply here as soon as possible.`;
 app.post("/", async (req, res) => {
   const update = req.body;
 
+  // Check if the message exists in the update
   if (!update.message) {
     return res.send("ok");
   }
@@ -35,7 +36,6 @@ app.post("/", async (req, res) => {
         text: WELCOME_MESSAGE,
       }),
     });
-
     return res.send("ok");
   }
 
@@ -46,6 +46,7 @@ app.post("/", async (req, res) => {
       msg.reply_to_message.caption ||
       "";
 
+    // Match User ID in the reply
     const match = original.match(/User ID:\s*(\d+)/);
     if (!match) return res.send("ok");
 
@@ -63,24 +64,22 @@ app.post("/", async (req, res) => {
     return res.send("ok");
   }
 
-// 👤 USER → ADMIN (relay)
-const userName = msg.from.username ? `@${msg.from.username}` : "No Username";
+  // 👤 USER → ADMIN (forward the message)
+  const userName = msg.from.username ? `@${msg.from.username}` : "No Username";
+  const forwardedMessage = `Forwarded from: ${userName}`;
 
-// Construct the forwarded message
-const forwardedMessage = `Forwarded from: ${userName}`;
+  // Send the user's message to the admin
+  await fetch(`${API}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      chat_id: ADMIN_ID,
+      text: `📩 New message\n${forwardedMessage}\nUser ID: ${fromId}\n\n${text || "[non-text message]"}`,
+    }),
+  });
 
-await fetch(`${API}/sendMessage`, {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({
-    chat_id: ADMIN_ID,
-    text: `📩 New message\n${forwardedMessage}\nUser ID: ${fromId}\n\n${text || "[non-text message]"}`,
-  }),
+  res.send("ok");
 });
-
-res.send("ok");
-});
-
 
 // REQUIRED FOR RENDER
 const PORT = process.env.PORT || 3000;
