@@ -1,5 +1,7 @@
 const express = require("express");
 const fetch = require("node-fetch");
+const BOT_INFO_CACHE = {};
+
 
 const app = express();
 app.use(express.json());
@@ -13,11 +15,17 @@ const BOTS = {
   botC: process.env.BOT_TOKEN_C,
 };
 
-const WELCOME_MESSAGE = `👋 Welcome!
+async function getBotName(token) {
+  if (BOT_INFO_CACHE[token]) return BOT_INFO_CACHE[token];
 
-This is a relay support bot.
-Send your message and it will be delivered to our team.
-We’ll reply here as soon as possible.`;
+  const res = await fetch(`https://api.telegram.org/bot${token}/getMe`);
+  const data = await res.json();
+
+  const name = data.result.first_name;
+  BOT_INFO_CACHE[token] = name;
+
+  return name;
+}
 
 // helper
 const api = (token) => `https://api.telegram.org/bot${token}`;
@@ -36,17 +44,27 @@ app.post("/webhook/:botKey", async (req, res) => {
   const text = msg.text || msg.caption || "";
 
   /* START */
-  if (text === "/start") {
-    await fetch(`${api(token)}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: fromId,
-        text: WELCOME_MESSAGE,
-      }),
-    });
-    return res.send("ok");
-  }
+ if (text === "/start") {
+  const botName = await getBotName(token);
+
+  const welcomeMessage = `👋 Welcome!
+
+This is a relay support bot of *${botName}*.
+Send your message and it will be delivered to our team.
+We’ll reply here as soon as possible.`;
+
+  await fetch(`${api(token)}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      chat_id: fromId,
+      text: welcomeMessage,
+      parse_mode: "Markdown",
+    }),
+  });
+
+  return res.send("ok");
+}
 
   /* ADMIN REPLY */
   if (fromId === ADMIN_ID && msg.reply_to_message) {
