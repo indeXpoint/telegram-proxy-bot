@@ -23,7 +23,11 @@ const BOTS = {
 const BOT_INFO_CACHE = {};
 
 // In-memory ticket store
-const tickets = {}; // userId -> { ticketId, status: 'open' }
+// Structure: tickets[userId] = { ticketId, status, lastBotKey }
+const tickets = {};
+
+// Admin reply tracker: replyQueue[userId] = botKey
+const replyQueue = {}; // tracks which bot the admin is replying through
 
 // Helper: get bot name dynamically
 async function getBotName(token) {
@@ -39,9 +43,11 @@ async function getBotName(token) {
 const api = (token) => `https://api.telegram.org/bot${token}`;
 
 // Helper: Generate or get ticket for user
-function getTicket(userId) {
+function getTicket(userId, botKey) {
   if (!tickets[userId]) {
-    tickets[userId] = { ticketId: crypto.randomBytes(3).toString("hex"), status: "open" };
+    tickets[userId] = { ticketId: crypto.randomBytes(3).toString("hex"), status: "open", lastBotKey: botKey };
+  } else {
+    tickets[userId].lastBotKey = botKey;
   }
   return tickets[userId].ticketId;
 }
@@ -57,6 +63,46 @@ app.post("/webhook/:botKey", async (req, res) => {
     if (!token) return res.send("Unknown bot");
 
     const update = req.body;
+
+    // =======================
+    // CALLBACK QUERY (admin buttons)
+    // =======================
+    if (update.callback_query) {
+      const callback = update.callback_query;
+      const data = callback.data; // "reply_userId" or "close_userId"
+      const userId = data.split("_")[1];
+
+      if (!tickets[userId]) {
+        await fetch(`${api(token)}/answerCallbackQuery`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ callback_query_id: callback.id, text: "Ticket not found ❌" }),
+        });
+        return res.send("ok");
+      }
+
+      if (data.startsWith("close_")) {
+        tickets[userId].status = "closed";
+        await fetch(`${api(token)}/answerCallbackQuery`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ callback_query_id: callback.id, text: `Ticket #${tickets[userId].ticketId} closed ✅` }),
+        });
+      } else if (data.startsWith("reply_")) {
+        replyQueue[userId] = tickets[userId].lastBotKey; // mark admin is replying to this user
+        await fetch(`${api(token)}/answerCallbackQuery`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ callback_query_id: callback.id, text: `Send your reply to ticket #${tickets[userId].ticketId}` }),
+        });
+      }
+
+      return res.send("ok");
+    }
+
+    // =======================
+    // MESSAGE HANDLER
+    // =======================
     if (!update.message) return res.send("ok");
 
     const msg = update.message;
@@ -69,7 +115,7 @@ app.post("/webhook/:botKey", async (req, res) => {
     // START COMMAND → generate ticket
     // =======================
     if (text === "/start") {
-      const ticketId = getTicket(fromId);
+      const ticketId = getTicket(fromId, botKey);
       const welcomeMessage = `👋 Welcome!
 
 This is a relay support bot of *${botName}*.
@@ -80,100 +126,69 @@ We’ll reply here as soon as possible.`;
       await fetch(`${api(token)}/sendMessage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: fromId,
-          text: welcomeMessage,
-          parse_mode: "Markdown",
-        }),
+        body: JSON.stringify({ chat_id: fromId, text: welcomeMessage, parse_mode: "Markdown" }),
       });
       return res.send("ok");
     }
 
     // =======================
-    // ADMIN BUTTON HANDLER
+    // ADMIN REPLY → check replyQueue
     // =======================
-    if (update.callback_query) {
-      const callback = update.callback_query;
-      const data = callback.data; // e.g., "reply_<userId>" or "close_<userId>"
-      const userId = data.split("_")[1];
+    if (fromId === ADMIN_ID) {
+      // Find which user the admin is replying to
+      const replyingUserId = Object.keys(replyQueue).find((u) => replyQueue[u] === botKey);
+      if (replyingUserId) {
+        // Handle media/text forwarding
+        if (msg.photo) {
+          const fileId = msg.photo[msg.photo.length - 1].file_id;
+          await fetch(`${api(token)}/sendPhoto`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ chat_id: replyingUserId, photo: fileId, caption: text || "" }),
+          });
+        } else if (msg.video) {
+          await fetch(`${api(token)}/sendVideo`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ chat_id: replyingUserId, video: msg.video.file_id, caption: text || "" }),
+          });
+        } else if (msg.document) {
+          await fetch(`${api(token)}/sendDocument`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ chat_id: replyingUserId, document: msg.document.file_id, caption: text || "" }),
+          });
+        } else if (msg.audio) {
+          await fetch(`${api(token)}/sendAudio`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ chat_id: replyingUserId, audio: msg.audio.file_id, caption: text || "" }),
+          });
+        } else if (msg.voice) {
+          await fetch(`${api(token)}/sendVoice`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ chat_id: replyingUserId, voice: msg.voice.file_id, caption: text || "" }),
+          });
+        } else {
+          await fetch(`${api(token)}/sendMessage`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ chat_id: replyingUserId, text: text || "[reply]" }),
+          });
+        }
 
-      if (data.startsWith("close_")) {
-        if (tickets[userId]) tickets[userId].status = "closed";
-
-        await fetch(`${api(token)}/answerCallbackQuery`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ callback_query_id: callback.id, text: `Ticket #${tickets[userId].ticketId} closed ✅` }),
-        });
-
-      } else if (data.startsWith("reply_")) {
-        await fetch(`${api(token)}/answerCallbackQuery`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ callback_query_id: callback.id, text: "Send your reply as a normal message" }),
-        });
+        // Clear reply queue for this user
+        delete replyQueue[replyingUserId];
+        return res.send("ok");
       }
-      return res.send("ok");
-    }
-
-    // =======================
-    // ADMIN REPLY
-    // =======================
-    if (fromId === ADMIN_ID && msg.reply_to_message) {
-      const original = msg.reply_to_message.caption || msg.reply_to_message.text || "";
-      const match = original.match(/User ID:\s*(\d+)/);
-      if (!match) return res.send("ok");
-
-      const userId = match[1];
-
-      // Handle media and text
-      if (msg.photo) {
-        const fileId = msg.photo[msg.photo.length - 1].file_id;
-        await fetch(`${api(token)}/sendPhoto`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ chat_id: userId, photo: fileId, caption: text || "" }),
-        });
-      } else if (msg.video) {
-        await fetch(`${api(token)}/sendVideo`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ chat_id: userId, video: msg.video.file_id, caption: text || "" }),
-        });
-      } else if (msg.document) {
-        await fetch(`${api(token)}/sendDocument`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ chat_id: userId, document: msg.document.file_id, caption: text || "" }),
-        });
-      } else if (msg.audio) {
-        await fetch(`${api(token)}/sendAudio`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ chat_id: userId, audio: msg.audio.file_id, caption: text || "" }),
-        });
-      } else if (msg.voice) {
-        await fetch(`${api(token)}/sendVoice`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ chat_id: userId, voice: msg.voice.file_id, caption: text || "" }),
-        });
-      } else {
-        await fetch(`${api(token)}/sendMessage`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ chat_id: userId, text: text || "[reply]" }),
-        });
-      }
-
-      return res.send("ok");
     }
 
     // =======================
     // USER → ADMIN RELAY
     // =======================
     const username = msg.from.username ? `@${msg.from.username}` : "(no username)";
-    const ticketId = getTicket(fromId);
+    const ticketId = getTicket(fromId, botKey);
     const header =
       `📩 New message\n` +
       `Bot: ${botKey}\n` +
@@ -181,28 +196,16 @@ We’ll reply here as soon as possible.`;
       `From: ${username}\n` +
       `User ID: ${fromId}`;
 
-    // Inline buttons for admin
-    const inlineKeyboard = {
-      inline_keyboard: [
-        [
-          { text: "Reply", callback_data: `reply_${fromId}` },
-          { text: "Close Ticket", callback_data: `close_${fromId}` },
-        ],
-      ],
-    };
+    // Inline buttons
+    const inlineKeyboard = { inline_keyboard: [
+      [{ text: "Reply", callback_data: `reply_${fromId}` }, { text: "Close Ticket", callback_data: `close_${fromId}` }]
+    ]};
 
-    // Media relay with caption
     const options = {
       chat_id: ADMIN_ID,
       caption: `${header}\n\n${text || ""}`,
       reply_markup: inlineKeyboard,
     };
-
-    if (msg.photo) options.photo = msg.photo[msg.photo.length - 1].file_id;
-    else if (msg.video) options.video = msg.video.file_id;
-    else if (msg.document) options.document = msg.document.file_id;
-    else if (msg.audio) options.audio = msg.audio.file_id;
-    else if (msg.voice) options.voice = msg.voice.file_id;
 
     const method = msg.photo
       ? "sendPhoto"
@@ -216,6 +219,11 @@ We’ll reply here as soon as possible.`;
       ? "sendVoice"
       : "sendMessage";
 
+    if (method === "sendPhoto") options.photo = msg.photo[msg.photo.length - 1].file_id;
+    if (method === "sendVideo") options.video = msg.video.file_id;
+    if (method === "sendDocument") options.document = msg.document.file_id;
+    if (method === "sendAudio") options.audio = msg.audio.file_id;
+    if (method === "sendVoice") options.voice = msg.voice.file_id;
     if (method === "sendMessage") options.text = `${header}\n\n${text || "[non-text message]"}`;
 
     await fetch(`${api(token)}/${method}`, {
@@ -225,7 +233,6 @@ We’ll reply here as soon as possible.`;
     });
 
     res.send("ok");
-
   } catch (err) {
     console.error("Webhook error:", err);
     res.status(500).send("error");
