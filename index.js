@@ -1,5 +1,6 @@
 const express = require("express");
 const fetch = require("node-fetch");
+const crypto = require("crypto");
 
 const app = express();
 app.use(express.json());
@@ -8,24 +9,25 @@ app.use(express.json());
 // CONFIGURATION
 // =======================
 
-// Admin chat ID
 const ADMIN_ID = process.env.ADMIN_CHAT_ID;
 
-// Bot tokens (can scale to 100+ bots)
+// Map bot keys → tokens
 const BOTS = {
   botA: process.env.BOT_TOKEN_A,
   botB: process.env.BOT_TOKEN_B,
   botC: process.env.BOT_TOKEN_C,
-  // add more bots here or via a JSON env var
+  // Add more bots here or via a JSON env var
 };
 
-// Cache bot names to reduce API calls
+// Cache bot names
 const BOT_INFO_CACHE = {};
 
-// Helper to get bot name dynamically
+// In-memory ticket store (for simplicity, can replace with DB)
+const tickets = {}; // userId -> ticketId
+
+// Helper: get bot name dynamically
 async function getBotName(token) {
   if (BOT_INFO_CACHE[token]) return BOT_INFO_CACHE[token];
-
   const res = await fetch(`https://api.telegram.org/bot${token}/getMe`);
   const data = await res.json();
   const name = data.result.first_name;
@@ -33,11 +35,19 @@ async function getBotName(token) {
   return name;
 }
 
-// Helper to get Telegram API URL
+// Helper: Telegram API
 const api = (token) => `https://api.telegram.org/bot${token}`;
 
+// Helper: Generate ticket ID
+function generateTicketId(userId) {
+  if (!tickets[userId]) {
+    tickets[userId] = crypto.randomBytes(3).toString("hex"); // 6-char hex
+  }
+  return tickets[userId];
+}
+
 // =======================
-// ROUTE: Telegram Webhook
+// WEBHOOK HANDLER
 // =======================
 
 app.post("/webhook/:botKey", async (req, res) => {
@@ -53,12 +63,17 @@ app.post("/webhook/:botKey", async (req, res) => {
     const fromId = msg.from.id.toString();
     const text = msg.text || msg.caption || "";
 
+    const botName = await getBotName(token);
+
     // =======================
     // START COMMAND
     // =======================
     if (text === "/start") {
-      const botName = await getBotName(token);
-      const welcomeMessage = `👋 Welcome!\n\nThis is a relay support bot of *${botName}*.\nSend your message and it will be delivered to our team.\nWe’ll reply here as soon as possible.`;
+      const welcomeMessage = `👋 Welcome!
+
+This is a relay support bot of *${botName}*.
+Send your message and it will be delivered to our team.
+We’ll reply here as soon as possible.`;
 
       await fetch(`${api(token)}/sendMessage`, {
         method: "POST",
@@ -69,7 +84,6 @@ app.post("/webhook/:botKey", async (req, res) => {
           parse_mode: "Markdown",
         }),
       });
-
       return res.send("ok");
     }
 
@@ -83,7 +97,7 @@ app.post("/webhook/:botKey", async (req, res) => {
 
       const userId = match[1];
 
-      // Check media types
+      // Handle all media types
       if (msg.photo) {
         const fileId = msg.photo[msg.photo.length - 1].file_id;
         await fetch(`${api(token)}/sendPhoto`, {
@@ -103,6 +117,18 @@ app.post("/webhook/:botKey", async (req, res) => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ chat_id: userId, document: msg.document.file_id, caption: text || "" }),
         });
+      } else if (msg.audio) {
+        await fetch(`${api(token)}/sendAudio`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chat_id: userId, audio: msg.audio.file_id, caption: text || "" }),
+        });
+      } else if (msg.voice) {
+        await fetch(`${api(token)}/sendVoice`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chat_id: userId, voice: msg.voice.file_id, caption: text || "" }),
+        });
       } else {
         await fetch(`${api(token)}/sendMessage`, {
           method: "POST",
@@ -118,8 +144,15 @@ app.post("/webhook/:botKey", async (req, res) => {
     // USER → ADMIN RELAY
     // =======================
     const username = msg.from.username ? `@${msg.from.username}` : "(no username)";
-    const header = `📩 New message\nBot: ${botKey}\nFrom: ${username}\nUser ID: ${fromId}`;
+    const ticketId = generateTicketId(fromId);
+    const header =
+      `📩 New message\n` +
+      `Bot: ${botKey}\n` +
+      `Ticket: #${ticketId}\n` +
+      `From: ${username}\n` +
+      `User ID: ${fromId}`;
 
+    // Media relay
     if (msg.photo) {
       const fileId = msg.photo[msg.photo.length - 1].file_id;
       await fetch(`${api(token)}/sendPhoto`, {
@@ -138,6 +171,18 @@ app.post("/webhook/:botKey", async (req, res) => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ chat_id: ADMIN_ID, document: msg.document.file_id, caption: `${header}\n\n${text || ""}` }),
+      });
+    } else if (msg.audio) {
+      await fetch(`${api(token)}/sendAudio`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: ADMIN_ID, audio: msg.audio.file_id, caption: `${header}\n\n${text || ""}` }),
+      });
+    } else if (msg.voice) {
+      await fetch(`${api(token)}/sendVoice`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: ADMIN_ID, voice: msg.voice.file_id, caption: `${header}\n\n${text || ""}` }),
       });
     } else {
       await fetch(`${api(token)}/sendMessage`, {
@@ -159,4 +204,4 @@ app.post("/webhook/:botKey", async (req, res) => {
 // START SERVER
 // =======================
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`✅ Multi-bot relay running on port ${PORT}`));
+app.listen(PORT, () => console.log(`✅ Multi-bot support relay running on port ${PORT}`));
