@@ -16,14 +16,14 @@ const BOTS = {
   botA: process.env.BOT_TOKEN_A,
   botB: process.env.BOT_TOKEN_B,
   botC: process.env.BOT_TOKEN_C,
-  // Add more bots here or via a JSON env var
+  // Add more bots here
 };
 
 // Cache bot names
 const BOT_INFO_CACHE = {};
 
-// In-memory ticket store (for simplicity, can replace with DB)
-const tickets = {}; // userId -> ticketId
+// In-memory ticket store
+const tickets = {}; // userId -> { ticketId, status: 'open' }
 
 // Helper: get bot name dynamically
 async function getBotName(token) {
@@ -38,12 +38,12 @@ async function getBotName(token) {
 // Helper: Telegram API
 const api = (token) => `https://api.telegram.org/bot${token}`;
 
-// Helper: Generate ticket ID
-function generateTicketId(userId) {
+// Helper: Generate or get ticket for user
+function getTicket(userId) {
   if (!tickets[userId]) {
-    tickets[userId] = crypto.randomBytes(3).toString("hex"); // 6-char hex
+    tickets[userId] = { ticketId: crypto.randomBytes(3).toString("hex"), status: "open" };
   }
-  return tickets[userId];
+  return tickets[userId].ticketId;
 }
 
 // =======================
@@ -66,12 +66,14 @@ app.post("/webhook/:botKey", async (req, res) => {
     const botName = await getBotName(token);
 
     // =======================
-    // START COMMAND
+    // START COMMAND → generate ticket
     // =======================
     if (text === "/start") {
+      const ticketId = getTicket(fromId);
       const welcomeMessage = `👋 Welcome!
 
 This is a relay support bot of *${botName}*.
+Your ticket ID is: *#${ticketId}*.
 Send your message and it will be delivered to our team.
 We’ll reply here as soon as possible.`;
 
@@ -88,6 +90,33 @@ We’ll reply here as soon as possible.`;
     }
 
     // =======================
+    // ADMIN BUTTON HANDLER
+    // =======================
+    if (update.callback_query) {
+      const callback = update.callback_query;
+      const data = callback.data; // e.g., "reply_<userId>" or "close_<userId>"
+      const userId = data.split("_")[1];
+
+      if (data.startsWith("close_")) {
+        if (tickets[userId]) tickets[userId].status = "closed";
+
+        await fetch(`${api(token)}/answerCallbackQuery`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ callback_query_id: callback.id, text: `Ticket #${tickets[userId].ticketId} closed ✅` }),
+        });
+
+      } else if (data.startsWith("reply_")) {
+        await fetch(`${api(token)}/answerCallbackQuery`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ callback_query_id: callback.id, text: "Send your reply as a normal message" }),
+        });
+      }
+      return res.send("ok");
+    }
+
+    // =======================
     // ADMIN REPLY
     // =======================
     if (fromId === ADMIN_ID && msg.reply_to_message) {
@@ -97,7 +126,7 @@ We’ll reply here as soon as possible.`;
 
       const userId = match[1];
 
-      // Handle all media types
+      // Handle media and text
       if (msg.photo) {
         const fileId = msg.photo[msg.photo.length - 1].file_id;
         await fetch(`${api(token)}/sendPhoto`, {
@@ -144,7 +173,7 @@ We’ll reply here as soon as possible.`;
     // USER → ADMIN RELAY
     // =======================
     const username = msg.from.username ? `@${msg.from.username}` : "(no username)";
-    const ticketId = generateTicketId(fromId);
+    const ticketId = getTicket(fromId);
     const header =
       `📩 New message\n` +
       `Bot: ${botKey}\n` +
@@ -152,45 +181,48 @@ We’ll reply here as soon as possible.`;
       `From: ${username}\n` +
       `User ID: ${fromId}`;
 
-    // Media relay
-    if (msg.photo) {
-      const fileId = msg.photo[msg.photo.length - 1].file_id;
-      await fetch(`${api(token)}/sendPhoto`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chat_id: ADMIN_ID, photo: fileId, caption: `${header}\n\n${text || ""}` }),
-      });
-    } else if (msg.video) {
-      await fetch(`${api(token)}/sendVideo`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chat_id: ADMIN_ID, video: msg.video.file_id, caption: `${header}\n\n${text || ""}` }),
-      });
-    } else if (msg.document) {
-      await fetch(`${api(token)}/sendDocument`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chat_id: ADMIN_ID, document: msg.document.file_id, caption: `${header}\n\n${text || ""}` }),
-      });
-    } else if (msg.audio) {
-      await fetch(`${api(token)}/sendAudio`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chat_id: ADMIN_ID, audio: msg.audio.file_id, caption: `${header}\n\n${text || ""}` }),
-      });
-    } else if (msg.voice) {
-      await fetch(`${api(token)}/sendVoice`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chat_id: ADMIN_ID, voice: msg.voice.file_id, caption: `${header}\n\n${text || ""}` }),
-      });
-    } else {
-      await fetch(`${api(token)}/sendMessage`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chat_id: ADMIN_ID, text: `${header}\n\n${text || "[non-text message]"}` }),
-      });
-    }
+    // Inline buttons for admin
+    const inlineKeyboard = {
+      inline_keyboard: [
+        [
+          { text: "Reply", callback_data: `reply_${fromId}` },
+          { text: "Close Ticket", callback_data: `close_${fromId}` },
+        ],
+      ],
+    };
+
+    // Media relay with caption
+    const options = {
+      chat_id: ADMIN_ID,
+      caption: `${header}\n\n${text || ""}`,
+      reply_markup: inlineKeyboard,
+    };
+
+    if (msg.photo) options.photo = msg.photo[msg.photo.length - 1].file_id;
+    else if (msg.video) options.video = msg.video.file_id;
+    else if (msg.document) options.document = msg.document.file_id;
+    else if (msg.audio) options.audio = msg.audio.file_id;
+    else if (msg.voice) options.voice = msg.voice.file_id;
+
+    const method = msg.photo
+      ? "sendPhoto"
+      : msg.video
+      ? "sendVideo"
+      : msg.document
+      ? "sendDocument"
+      : msg.audio
+      ? "sendAudio"
+      : msg.voice
+      ? "sendVoice"
+      : "sendMessage";
+
+    if (method === "sendMessage") options.text = `${header}\n\n${text || "[non-text message]"}`;
+
+    await fetch(`${api(token)}/${method}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(options),
+    });
 
     res.send("ok");
 
