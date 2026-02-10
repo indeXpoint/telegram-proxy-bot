@@ -63,18 +63,22 @@ app.post("/", async (req, res) => {
     return res.send("ok");
   }
 
-  // 👤 USER → ADMIN (relay)
-  await fetch(`${API}/sendMessage`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      chat_id: ADMIN_ID,
-      text: `📩 New message\nUser ID: ${fromId}\n\n${text || "[non-text message]"}`,
-    }),
-  });
+// 👤 USER → ADMIN (relay)
+const userName = msg.from.username ? `@${msg.from.username}` : "No Username";
+const fullName = `${msg.from.first_name} ${msg.from.last_name || ""}`.trim();
+const userProfile = fullName || userName || "Anonymous User";
 
-  res.send("ok");
+await fetch(`${API}/sendMessage`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    chat_id: ADMIN_ID,
+    text: `📩 New message\nFrom: ${userProfile}\nUser ID: ${fromId}\n\n${text || "[non-text message]"}`,
+  }),
 });
+
+res.send("ok");
+
 
 // REQUIRED FOR RENDER
 const PORT = process.env.PORT || 3000;
