@@ -8,9 +8,14 @@ const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_ID = process.env.ADMIN_CHAT_ID;
 const API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
+const WELCOME_MESSAGE = `👋 Welcome!
+
+This is a relay support bot.
+Send your message and it will be delivered to our team.
+We’ll reply here as soon as possible.`;
+
 app.post("/", async (req, res) => {
   const update = req.body;
-  console.log("UPDATE:", JSON.stringify(update));
 
   if (!update.message) {
     return res.send("ok");
@@ -20,26 +25,31 @@ app.post("/", async (req, res) => {
   const fromId = msg.from.id.toString();
   const text = msg.text || msg.caption || "";
 
+  // 🚀 START command
+  if (text === "/start") {
+    await fetch(`${API}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: fromId,
+        text: WELCOME_MESSAGE,
+      }),
+    });
+
+    return res.send("ok");
+  }
+
   // 👑 ADMIN replying
-  if (
-    fromId === ADMIN_ID &&
-    msg.reply_to_message
-  ) {
+  if (fromId === ADMIN_ID && msg.reply_to_message) {
     const original =
       msg.reply_to_message.text ||
       msg.reply_to_message.caption ||
       "";
 
     const match = original.match(/User ID:\s*(\d+)/);
-
-    if (!match) {
-      console.log("❌ No User ID found in reply");
-      return res.send("ok");
-    }
+    if (!match) return res.send("ok");
 
     const userId = match[1];
-
-    console.log("➡️ Sending reply to user:", userId);
 
     await fetch(`${API}/sendMessage`, {
       method: "POST",
@@ -53,9 +63,7 @@ app.post("/", async (req, res) => {
     return res.send("ok");
   }
 
-  // 👤 USER → ADMIN
-  console.log("📩 New user message:", fromId);
-
+  // 👤 USER → ADMIN (relay)
   await fetch(`${API}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
