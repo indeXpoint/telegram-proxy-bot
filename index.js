@@ -131,7 +131,8 @@ app.post("/webhook/:botKey", async (req, res) => {
             `👋 Welcome!\n\n` +
             `This is *${botName}* support.\n` +
             `🎫 Ticket ID: *#${ticketId}*\n\n` +
-            `Send your message below.`,
+            `Send your message and it will be delivered to our team.`,
+            'We’ll reply here as soon as possible.`,
           parse_mode: "Markdown",
         }),
       });
