@@ -10,19 +10,17 @@ app.use(express.json());
 // =======================
 const ADMIN_ID = process.env.ADMIN_CHAT_ID;
 
-// Define all your bots here
+// Add your bots here
 const BOTS = {
   botA: process.env.BOT_TOKEN_A,
   botB: process.env.BOT_TOKEN_B,
-  // add more bots as needed
+  // Add more bots as needed
 };
 
 // In-memory storage
-const tickets = {}; // { userId: { ticketId, botKey } }
-const replyQueue = {}; // { userId: botKey }
-
-// Cache bot names
-const botNames = {};
+const tickets = {};       // { userId: { ticketId, botKey } }
+const replyQueue = {};    // { userId: botKey }
+const botNames = {};      // Cache bot names
 
 // =======================
 // TELEGRAM HELPERS
@@ -86,24 +84,26 @@ app.post("/webhook/:botKey", async (req, res) => {
 
     const update = req.body;
 
-    // =======================
-    // CALLBACK BUTTONS
-    // =======================
+    // -----------------------
+    // CALLBACK QUERY: Reply / Close
+    // -----------------------
     if (update.callback_query) {
       const callback = update.callback_query;
-      const data = callback.data; // reply_userId or close_userId
+      const data = callback.data; // "reply_userId" or "close_userId"
       const userId = data.split("_")[1];
 
       if (data.startsWith("close_")) {
         delete tickets[userId];
         delete replyQueue[userId];
 
+        // Notify admin
         await fetch(`${api(token)}/answerCallbackQuery`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ callback_query_id: callback.id, text: "Ticket closed ✅" }),
         });
 
+        // Notify user
         await sendMessage(token, userId, { type: "text", text: "💬 Chat closed. Please click /start to begin a new conversation." });
       } else if (data.startsWith("reply_")) {
         replyQueue[userId] = botKey;
@@ -117,9 +117,9 @@ app.post("/webhook/:botKey", async (req, res) => {
       return res.send("ok");
     }
 
-    // =======================
+    // -----------------------
     // MESSAGE HANDLER
-    // =======================
+    // -----------------------
     if (!update.message) return res.send("ok");
 
     const msg = update.message;
@@ -129,14 +129,17 @@ app.post("/webhook/:botKey", async (req, res) => {
 
     const botName = await getBotName(token);
 
-    // START command → create ticket
+    // /start command → create ticket
     if (text === "/start") {
       tickets[fromId] = { ticketId: crypto.randomBytes(3).toString("hex"), botKey };
-      await sendMessage(token, fromId, { type: "text", text: `👋 Welcome!\nThis is *${botName}*.\nSend a message to start.\nYour ticket ID: #${tickets[fromId].ticketId}` });
+      await sendMessage(token, fromId, {
+        type: "text",
+        text: `👋 Welcome!\nThis is *${botName}*.\nSend a message to start.\nYour ticket ID: #${tickets[fromId].ticketId}`,
+      });
       return res.send("ok");
     }
 
-    // ADMIN message → reply mode
+    // ADMIN REPLY
     if (fromId === ADMIN_ID) {
       const replyingUserId = Object.keys(replyQueue).find(u => replyQueue[u] === botKey);
       if (replyingUserId) {
@@ -146,7 +149,7 @@ app.post("/webhook/:botKey", async (req, res) => {
       }
     }
 
-    // USER message → forward to admin
+    // USER MESSAGE → ADMIN relay
     if (tickets[fromId] && tickets[fromId].botKey === botKey) {
       const username = msg.from.username ? `@${msg.from.username}` : "(no username)";
       const ticketId = tickets[fromId].ticketId;
@@ -163,7 +166,7 @@ app.post("/webhook/:botKey", async (req, res) => {
 
       await sendMessage(token, ADMIN_ID, adminContent);
 
-      // Send inline keyboard for buttons
+      // Send inline buttons for admin actions
       if (media.type === "text") {
         await fetch(`${api(token)}/sendMessage`, {
           method: "POST",
@@ -174,6 +177,7 @@ app.post("/webhook/:botKey", async (req, res) => {
 
       return res.send("ok");
     } else {
+      // User hasn't started
       await sendMessage(token, fromId, { type: "text", text: "❌ Please click /start to begin a conversation." });
       return res.send("ok");
     }
