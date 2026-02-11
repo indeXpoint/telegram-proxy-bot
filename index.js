@@ -5,7 +5,9 @@ const crypto = require("crypto");
 const app = express();
 app.use(express.json());
 
-app.get('/health', (req, res) => res.status(200).send('Bot alive'));
+app.get("/", (req, res) => {
+  res.send("✅ Bot is running");
+});
 
 // =======================
 // CONFIG
