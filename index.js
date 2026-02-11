@@ -14,8 +14,7 @@ const ADMIN_ID = process.env.ADMIN_CHAT_ID;
 const BOTS = {
   botA: process.env.BOT_TOKEN_A,
   botB: process.env.BOT_TOKEN_B,
-  botC: process.env.BOT_TOKEN_C,
-  // Add more BOT_TOKEN_X as needed
+  // add more bots as needed
 };
 
 // In-memory storage
@@ -87,7 +86,9 @@ app.post("/webhook/:botKey", async (req, res) => {
 
     const update = req.body;
 
-    // CALLBACK QUERY: Reply / Close
+    // =======================
+    // CALLBACK BUTTONS
+    // =======================
     if (update.callback_query) {
       const callback = update.callback_query;
       const data = callback.data; // reply_userId or close_userId
@@ -112,11 +113,15 @@ app.post("/webhook/:botKey", async (req, res) => {
           body: JSON.stringify({ callback_query_id: callback.id, text: "Reply mode activated. Send your message to user." }),
         });
       }
+
       return res.send("ok");
     }
 
+    // =======================
     // MESSAGE HANDLER
+    // =======================
     if (!update.message) return res.send("ok");
+
     const msg = update.message;
     const fromId = msg.from.id.toString();
     const text = msg.text || msg.caption || "";
@@ -124,7 +129,7 @@ app.post("/webhook/:botKey", async (req, res) => {
 
     const botName = await getBotName(token);
 
-    // /start command → create ticket
+    // START command → create ticket
     if (text === "/start") {
       tickets[fromId] = { ticketId: crypto.randomBytes(3).toString("hex"), botKey };
       await sendMessage(token, fromId, { type: "text", text: `👋 Welcome!\nThis is *${botName}*.\nSend a message to start.\nYour ticket ID: #${tickets[fromId].ticketId}` });
@@ -151,13 +156,14 @@ app.post("/webhook/:botKey", async (req, res) => {
         ],
       };
       const header = `📩 New message\nBot: ${botKey}\nTicket: #${ticketId}\nFrom: ${username}\nUser ID: ${fromId}`;
+
       const adminContent = media.type === "text"
         ? { type: "text", text: `${header}\n\n${text}` }
         : { ...media, text: `${header}` };
 
       await sendMessage(token, ADMIN_ID, adminContent);
 
-      // Send inline keyboard if text
+      // Send inline keyboard for buttons
       if (media.type === "text") {
         await fetch(`${api(token)}/sendMessage`, {
           method: "POST",
@@ -165,9 +171,9 @@ app.post("/webhook/:botKey", async (req, res) => {
           body: JSON.stringify({ chat_id: ADMIN_ID, text: " ", reply_markup: inlineKeyboard }),
         });
       }
+
       return res.send("ok");
     } else {
-      // User not started ticket
       await sendMessage(token, fromId, { type: "text", text: "❌ Please click /start to begin a conversation." });
       return res.send("ok");
     }
@@ -182,4 +188,4 @@ app.post("/webhook/:botKey", async (req, res) => {
 // START SERVER
 // =======================
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`✅ Multi-bot support relay running on port ${PORT}`));
+app.listen(PORT, () => console.log(`✅ Multi-bot relay running on port ${PORT}`));
