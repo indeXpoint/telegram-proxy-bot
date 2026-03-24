@@ -20,8 +20,8 @@ const BOTS = {
   botC: process.env.BOT_TOKEN_C,
   botD: process.env.BOT_TOKEN_D,
   botE: process.env.BOT_TOKEN_E,
-  botE: process.env.BOT_TOKEN_F,
-  botE: process.env.BOT_TOKEN_G,
+  botF: process.env.BOT_TOKEN_F,
+  botG: process.env.BOT_TOKEN_G,
 };
 
 // In-memory storage (Render-safe but resets on restart)
