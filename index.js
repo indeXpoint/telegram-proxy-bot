@@ -67,6 +67,8 @@ const BOTS = {
   botAX: process.env.BOT_TOKEN_AX,
   botAY: process.env.BOT_TOKEN_AY,
   botAZ: process.env.BOT_TOKEN_AZ,
+  botA1: process.env.BOT_TOKEN_A1,
+
 };
 
 // In-memory storage (Render-safe but resets on restart)
