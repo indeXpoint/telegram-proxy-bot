@@ -68,6 +68,7 @@ const BOTS = {
   botAY: process.env.BOT_TOKEN_AY,
   botAZ: process.env.BOT_TOKEN_AZ,
   botA1: process.env.BOT_TOKEN_A1,
+  botA2: process.env.BOT_TOKEN_A2,
 
 };
 
